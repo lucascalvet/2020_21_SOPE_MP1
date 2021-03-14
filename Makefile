@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-g -Wall
+CFLAGS=-g -Wall -D_GNU_SOURCE
 
 RM=rm -f
 
