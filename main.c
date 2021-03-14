@@ -27,9 +27,6 @@ enum Mode
     OCTAL_MODE
 };
 
-//time_t t = time(NULL);
-static clock_t start = clock();
-
 void print_usage(int error)
 {
     char *st_error;
@@ -78,13 +75,23 @@ void print_usage(int error)
     exit(0);
 }
 
-void write_log(char *event, char *info, int log_file)
+void write_log(int log_file, clock_t start, char *event, char *info)
 {
-    write(log_file, sprintf("%s ; %s", event, info));
+    //time_t instant = time(0);
+    clock_t instant = clock();
+    //unsigned log_time = difftime(end, start) * 1000;
+    unsigned log_time = (instant - start) * 1000 / CLOCKS_PER_SEC;
+    pid_t pid = getpid();
+    char *log;
+    asprintf(&log, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
+    write(log_file, log, 100);
+    free(log);
 }
 
 int main(int argc, char *argv[], char *envp[])
 {
+    //time_t start = time(0);
+    clock_t start = clock();
 
     if (argc <= 1)
     {
@@ -114,7 +121,7 @@ int main(int argc, char *argv[], char *envp[])
     else
     {
         log = true;
-        printf("Logging!\n")
+        printf("Logging!\n");
         log_file = open(log_filename, O_WRONLY | O_CREAT | O_TRUNC);
     }
 
@@ -289,11 +296,17 @@ int main(int argc, char *argv[], char *envp[])
 
     if (log)
     {
-        write_log("FILE_MODF", sprintf("%s : %o : %o",realpath(path), i_mode, f_mode), log_file);
+        char *log_message;
+        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode, f_mode);
+        write_log(log_file, start, "FILE_MODF", log_message);
+        free(log_message);
     }
 
     //Time End
+    //time_t end = time(0);
     clock_t end = clock();
+    //time_spent = difftime(end, start);
     time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
-    printf("\nEND Tempo de execucao do modulo: %.2f ms \n", time_spent);
+    printf("\nEND Execution Time: %.2f ms \n", time_spent);
+    close(log_file);
 }
