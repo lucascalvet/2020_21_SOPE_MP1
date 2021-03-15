@@ -5,14 +5,17 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <time.h>
 
 #define SHOW_INFO
 #define OK 0
-#define BIT(N) (1 << N)
+#define BIT(N) (1 << (N))
+#define MODE_MASK 0x1ff
 
 enum Verbosity
 {
@@ -27,9 +30,16 @@ enum Mode
     OCTAL_MODE
 };
 
-void print_usage(int error)
+static char *path;
+static int nftot = 0;
+static int nfmod = 0;
+
+typedef void sigfunc(int);
+sigfunc *signal(int signo, sigfunc *func);
+
+void print_error(int error)
 {
-    char *st_error;
+    char *st_error = NULL;
     switch (error)
     {
     case EPERM:
@@ -58,8 +68,14 @@ void print_usage(int error)
         st_error = "Unspecified Error";
         break;
     }
-    if (error != 0)
-        printf("\n %s \n", st_error);
+
+    printf("\n%s\n", st_error);
+
+    exit(error);
+}
+
+void print_usage()
+{
     printf("\n"
            "Usage: xmod [OPTIONS] MODE FILE/DIR\n"
            "       xmod [OPTIONS] OCTAL-MODE FILE/DIR\n"
@@ -72,6 +88,7 @@ void print_usage(int error)
            "MODE: <u|g|o|a><-|+|=><rwx>\n"
            "\n"
            "OCTAL-MODE: 0<0-7><0-7><0-7>\n");
+
     exit(0);
 }
 
@@ -88,15 +105,70 @@ void write_log(int log_file, clock_t start, char *event, char *info)
     free(log);
 }
 
+void sig_handler(int signal)
+{
+    if (signal == SIGINT)
+    {
+        pid_t pid = getpid();
+        printf("\n%d ; %s ; %d ; %d", pid, path, nftot, nfmod);
+
+        char *buffer = NULL;
+        bool answer = false;
+        size_t n = 0;
+
+        do
+        {
+            printf("\nAre you sure you want to terminate the program? (Y/N)\n");
+
+            getline(&buffer, &n, stdin);
+            if (strcasecmp(buffer, "Y\n") == 0)
+            {
+                answer = true;
+                break;
+            }
+            else if (strcasecmp(buffer, "N\n") == 0)
+            {
+                answer = false;
+                break;
+            }
+
+        } while (true);
+
+        free(buffer);
+
+        if (answer)
+        {
+            exit(0);
+        }
+    }
+}
+
+int get_mode_string(mode_t mode, char **result)
+{
+    *result = malloc(10 * sizeof(char));
+    if (*result == NULL)
+        return -1;
+    mode = mode & MODE_MASK;
+    strcpy(*result, "rwxrwxrwx");
+    for (int i = 0; i < 9; i++)
+    {
+        if (!(mode & BIT(8 - i)))
+            (*result)[i] = '-';
+    }
+
+    return OK;
+}
+
 int main(int argc, char *argv[], char *envp[])
 {
     //time_t start = time(0);
     clock_t start = clock();
 
+    signal(SIGINT, sig_handler);
+
     if (argc <= 1)
     {
-        print_usage(22);
-        exit(0);
+        print_usage();
     }
 
     double time_spent = 0.0;
@@ -104,7 +176,6 @@ int main(int argc, char *argv[], char *envp[])
     enum Mode mode;
     bool recursive = false;
     bool log;
-    char *path;
     char *e_mode;
     struct stat f_stat;
     mode_t i_mode;
@@ -122,14 +193,14 @@ int main(int argc, char *argv[], char *envp[])
     {
         log = true;
         printf("Logging!\n");
-        log_file = open(log_filename, O_WRONLY | O_CREAT | O_TRUNC);
+        log_file = open(log_filename, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     }
 
     for (arg = 1; arg < argc && argv[arg][0] == '-'; arg++)
     {
         if (argv[arg][1] == '\0' || argv[arg][2] != '\0')
         {
-            print_usage(22);
+            print_error(EINVAL);
         }
 
         switch (argv[arg][1])
@@ -147,7 +218,7 @@ int main(int argc, char *argv[], char *envp[])
             break;
 
         default:
-            print_usage(22);
+            print_error(EINVAL);
             break;
         }
     }
@@ -181,7 +252,7 @@ int main(int argc, char *argv[], char *envp[])
 
     if (arg == argc || arg == argc - 1)
     {
-        print_usage(22);
+        print_error(EINVAL);
     }
 
     switch (e_mode[0])
@@ -199,7 +270,7 @@ int main(int argc, char *argv[], char *envp[])
             (e_mode[3] != '\0' && e_mode[4] != '\0' && ((e_mode[4] != 'r' && e_mode[4] != 'w' && e_mode[4] != 'x') || e_mode[4] == e_mode[2] || e_mode[4] == e_mode[3])) ||
             (e_mode[3] != '\0' && e_mode[4] != '\0' && e_mode[5] != '\0'))
         {
-            print_usage(22);
+            print_error(EINVAL);
         }
 
         break;
@@ -209,12 +280,12 @@ int main(int argc, char *argv[], char *envp[])
         if (e_mode[1] == '\0' || e_mode[2] == '\0' || e_mode[3] == '\0' || e_mode[4] != '\0' ||
             e_mode[1] < '0' || e_mode[1] > '7' || e_mode[2] < '0' || e_mode[2] > '7' || e_mode[3] < '0' || e_mode[3] > '7')
         {
-            print_usage(22);
+            print_error(EINVAL);
         }
         break;
 
     default:
-        print_usage(22);
+        print_error(EINVAL);
         break;
     }
 
@@ -224,8 +295,8 @@ int main(int argc, char *argv[], char *envp[])
     {
         if (errno == ENOENT)
         {
-            printf("The file %s does not exist!\n", path);
-            print_usage(ENOENT);
+            fprintf(stderr, "xmod: cannot access '%s': No such file or directory\n", path);
+            exit(EXIT_FAILURE);
         }
     };
 
@@ -294,10 +365,49 @@ int main(int argc, char *argv[], char *envp[])
 
     chmod(path, f_mode);
 
+    if (stat(path, &f_stat) != 0)
+    {
+        if (errno == ENOENT)
+        {
+            fprintf(stderr, "xmod: cannot access '%s': No such file or directory\n", path);
+            exit(EXIT_FAILURE);
+        }
+    };
+
+    if (f_stat.st_mode == i_mode)
+    {
+        if (verbosity == ALL)
+        {
+            char *mode_str = NULL;
+            if (get_mode_string(i_mode, &mode_str) != OK)
+            {
+                exit(1);
+            }
+            printf("mode of '%s' retained as %o (%s)\n", path, i_mode & MODE_MASK, mode_str);
+            free(mode_str);
+        }
+    }
+    else if (verbosity != OFF)
+    {
+        char *i_mode_str;
+        char *f_mode_str;
+        if (get_mode_string(i_mode, &i_mode_str) != OK)
+        {
+            exit(1);
+        }
+        if (get_mode_string(i_mode, &f_mode_str) != OK)
+        {
+            exit(1);
+        }
+        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
+        free(i_mode_str);
+        free(f_mode_str);
+    }
+
     if (log)
     {
         char *log_message;
-        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode, f_mode);
+        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode & MODE_MASK, f_mode & MODE_MASK);
         write_log(log_file, start, "FILE_MODF", log_message);
         free(log_message);
     }
