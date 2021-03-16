@@ -32,11 +32,16 @@ enum Mode
 };
 
 static char *path;
+static enum Mode mode;
+static char *e_mode;
 static int nftot = 0;
 static int nfmod = 0;
 static int log_file = 0;
 static bool log = false;
 static clock_t start;
+static enum Verbosity verbosity = OFF;
+static bool recursive = false;
+static struct stat f_stat;
 
 typedef void sigfunc(int);
 sigfunc *signal(int signo, sigfunc *func);
@@ -75,7 +80,7 @@ void print_error(int error)
 
     printf("\n%s\n", st_error);
 
-    exit(error);
+    exit(error); //TODO: Log program exits
 }
 
 void print_usage()
@@ -165,6 +170,173 @@ int get_mode_string(mode_t mode, char **result)
     return OK;
 }
 
+mode_t get_mode(mode_t i_mode)
+{
+    mode_t f_mode;
+    if (mode == ALPHA_MODE)
+    {
+        mode_t perms = 0;
+        for (int i = 2; i < 5 && e_mode[i] != '\0'; i++)
+        {
+            switch (e_mode[i])
+            {
+            case 'r':
+                perms = perms | BIT(2) | BIT(5) | BIT(8);
+                break;
+
+            case 'w':
+                perms = perms | BIT(1) | BIT(4) | BIT(7);
+                break;
+
+            case 'x':
+                perms = perms | BIT(0) | BIT(3) | BIT(6);
+                break;
+
+            default:
+                break;
+            }
+        }
+
+        mode_t users = 0;
+
+        if (e_mode[0] == 'u' || e_mode[0] == 'a')
+            users = users | BIT(6) | BIT(7) | BIT(8);
+        if (e_mode[0] == 'g' || e_mode[0] == 'a')
+            users = users | BIT(3) | BIT(4) | BIT(5);
+        if (e_mode[0] == 'o' || e_mode[0] == 'a')
+            users = users | BIT(0) | BIT(1) | BIT(2);
+
+        if (e_mode[1] == '-')
+            f_mode = i_mode & ~(perms & users);
+        if (e_mode[1] == '+')
+            f_mode = i_mode | (perms & users);
+        if (e_mode[1] == '=')
+            f_mode = (i_mode & ~users) | (perms & users);
+    }
+    else if (mode == OCTAL_MODE)
+    {
+        f_mode = i_mode;
+        f_mode = (f_mode >> 9) << 9;
+        f_mode = f_mode | strtol(e_mode, NULL, 8);
+    }
+
+    return f_mode;
+}
+
+mode_t change_mode()
+{
+    //Check if the path is valid and get its mode
+    struct stat f_stat;
+    if (stat(path, &f_stat) != 0)
+    {
+        error(0, errno, "cannot access '%s'", path);
+        return 0;
+    }
+    mode_t i_mode = f_stat.st_mode;
+    mode_t f_mode = get_mode(i_mode);
+
+    //Change the FILE/DIR mode
+    chmod(path, f_mode); //TODO: Check for errors?
+
+    //Confirm the new FILE/DIR mode
+    if (stat(path, &f_stat) != 0)
+    {
+        error(0, errno, "cannot access '%s'", path);
+        return 0;
+    }
+
+    /** //FOR TESTING TIME LOGGING
+    char * test = NULL;
+    size_t n = 0;
+    getline(&test, &n, stdin);
+    */
+
+    //Log FILE_MODF
+    if (log)
+    {
+        char *log_message;
+        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
+        write_log("FILE_MODF", log_message);
+        free(log_message);
+    }
+
+    //Print verbosity messages accordingly
+    if (f_stat.st_mode == i_mode)
+    {
+        if (verbosity == ALL)
+        {
+            char *mode_str = NULL;
+            if (get_mode_string(i_mode, &mode_str) != OK)
+            {
+                exit(1);
+            }
+            printf("mode of '%s' retained as %o (%s)\n", path, i_mode & MODE_MASK, mode_str);
+            free(mode_str);
+        }
+    }
+    else if (verbosity != OFF)
+    {
+        char *i_mode_str;
+        char *f_mode_str;
+        if (get_mode_string(i_mode, &i_mode_str) != OK)
+        {
+            exit(1);
+        }
+        if (get_mode_string(f_stat.st_mode, &f_mode_str) != OK)
+        {
+            exit(1);
+        }
+        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
+        free(i_mode_str);
+        free(f_mode_str);
+    }
+    return f_stat.st_mode;
+}
+
+void change_mode_handler()
+{
+    mode_t mode = change_mode(NULL);
+
+    if (recursive && S_ISDIR(mode))
+    {
+        DIR *dir;
+        struct dirent *dir_entry;
+        if ((dir = opendir(path)) == NULL)
+        {
+            error(0, errno, "cannot read directory %s", path);
+            return;
+        }
+        chdir(path);
+        pid_t child_pid;
+        while ((dir_entry = readdir(dir)) != NULL)
+        {
+            path = dir_entry->d_name;
+            stat(dir_entry->d_name, &f_stat); //TODO: Check for errors as already done above
+            if (S_ISREG(f_stat.st_mode) && !S_ISLNK(f_stat.st_mode))
+            {
+                change_mode(dir_entry->d_name);
+                //TODO: Log FILE_MODF
+            }
+            if (S_ISDIR(f_stat.st_mode) && strcmp(dir_entry->d_name, "..") && strcmp(dir_entry->d_name, "."))
+            {
+                child_pid = fork(); //TODO: Log PROC_CREAT
+
+                if (child_pid == 0)
+                {
+                    change_mode_handler();
+                    break;
+                }
+            }
+        }
+        if (child_pid != 0)
+        {
+            int wstatus;
+            while (wait(&wstatus) > 0)
+                ;
+        }
+    }
+}
+
 int main(int argc, char *argv[], char *envp[])
 {
     //time_t start = time(0);
@@ -178,13 +350,6 @@ int main(int argc, char *argv[], char *envp[])
     }
 
     double time_spent = 0.0;
-    enum Verbosity verbosity = OFF; // TODO: Change to static global?
-    enum Mode mode;
-    bool recursive = false;
-    char *e_mode;
-    struct stat f_stat;
-    mode_t i_mode;
-    mode_t f_mode;
     unsigned arg;
     char *log_filename;
 
@@ -283,15 +448,6 @@ int main(int argc, char *argv[], char *envp[])
     }
 
     path = argv[arg + 1]; //Set inputted path
-    //Check if it is a valid path and get its mode
-    if (stat(path, &f_stat) != 0)
-    {
-        if (errno == ENOENT)
-        {
-            error(ENOENT, ENOENT, "cannot access '%s'", path);
-        }
-    };
-    i_mode = f_stat.st_mode;
 
     //Check for a logging file. If there is one, open it.
     log_filename = getenv("LOG_FILENAME");
@@ -305,134 +461,13 @@ int main(int argc, char *argv[], char *envp[])
         log = true;
     }
 
-    //Generate the new permissions mode
-    if (mode == ALPHA_MODE)
-    {
-        mode_t perms = 0;
-        for (int i = 2; i < 5 && e_mode[i] != '\0'; i++)
-        {
-            switch (e_mode[i])
-            {
-            case 'r':
-                perms = perms | BIT(2) | BIT(5) | BIT(8);
-                break;
-
-            case 'w':
-                perms = perms | BIT(1) | BIT(4) | BIT(7);
-                break;
-
-            case 'x':
-                perms = perms | BIT(0) | BIT(3) | BIT(6);
-                break;
-
-            default:
-                break;
-            }
-        }
-
-        mode_t users = 0;
-
-        if (e_mode[0] == 'u' || e_mode[0] == 'a')
-            users = users | BIT(6) | BIT(7) | BIT(8);
-        if (e_mode[0] == 'g' || e_mode[0] == 'a')
-            users = users | BIT(3) | BIT(4) | BIT(5);
-        if (e_mode[0] == 'o' || e_mode[0] == 'a')
-            users = users | BIT(0) | BIT(1) | BIT(2);
-
-        if (e_mode[1] == '-')
-            f_mode = i_mode & ~(perms & users);
-        if (e_mode[1] == '+')
-            f_mode = i_mode | (perms & users);
-        if (e_mode[1] == '=')
-            f_mode = (i_mode & ~users) | (perms & users);
-    }
-    else if (mode == OCTAL_MODE)
-    {
-        f_mode = i_mode;
-        f_mode = (f_mode >> 9) << 9;
-        f_mode = f_mode | strtol(e_mode, NULL, 8);
-    }
-
-    //Change the FILE/DIR mode
-    chmod(path, f_mode);
-
-    //Confirm the new FILE/DIR mode
-    if (stat(path, &f_stat) != 0)
-    {
-        if (errno == ENOENT)
-        {
-            error(ENOENT, ENOENT, "cannot access '%s'", path);
-        }
-    };
-
-    /** //FOR TESTING TIME LOGGING
-    char * test = NULL;
-    size_t n = 0;
-    getline(&test, &n, stdin);
-    */
-
-    //Log FILE_MODF
-    if (log)
-    {
-        char *log_message;
-        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
-        write_log("FILE_MODF", log_message);
-        free(log_message);
-    }
-
-    //Print verbosity messages accordingly
-    if (f_stat.st_mode == i_mode)
-    {
-        if (verbosity == ALL)
-        {
-            char *mode_str = NULL;
-            if (get_mode_string(i_mode, &mode_str) != OK)
-            {
-                exit(1);
-            }
-            printf("mode of '%s' retained as %o (%s)\n", path, i_mode & MODE_MASK, mode_str);
-            free(mode_str);
-        }
-    }
-    else if (verbosity != OFF)
-    {
-        char *i_mode_str;
-        char *f_mode_str;
-        if (get_mode_string(i_mode, &i_mode_str) != OK)
-        {
-            exit(1);
-        }
-        if (get_mode_string(f_stat.st_mode, &f_mode_str) != OK)
-        {
-            exit(1);
-        }
-        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
-        free(i_mode_str);
-        free(f_mode_str);
-    }
-
-    if (recursive && S_ISDIR(i_mode))
-    {
-        DIR *dir;
-        struct dirent *dir_entry;
-        if ((dir = opendir(path)) == NULL)
-        {
-            error(0, errno, "cannot read directory %s", path);
-        }
-        while ((dir_entry = readdir(dir)) != NULL)
-        {
-            stat(dir_entry->d_name, &f_stat);
-            if (S_ISREG(f_stat.st_mode))
-            {
-            }
-        }
-    }
+    change_mode_handler();
 
     //Time End
     //time_t end = time(0);
     clock_t end = clock();
     //time_spent = difftime(end, start) * 1000;
     time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
-    printf("\nEND Execution Time: %.2f ms \n", time_spent);
+    //printf("\nEND Execution Time: %.2f ms \n", time_spent);
     close(log_file);
 }
