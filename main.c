@@ -114,6 +114,19 @@ void write_log(char *event, char *info)
     free(log);
 }
 
+void log_exit(int exit_n)
+{
+    if (log)
+    {
+        char *log_message;
+        asprintf(&log_message, "Exit Code: %d", exit_n);
+        write_log("PROC_EXIT", log_message);
+        free(log_message);
+    }
+
+    exit(exit_n);
+}
+
 void sig_handler(int signal)
 {
     if (signal == SIGINT)
@@ -223,25 +236,25 @@ mode_t get_mode(mode_t i_mode)
     return f_mode;
 }
 
-mode_t change_mode()
+mode_t change_mode(char *actual_path)
 {
     //Check if the path is valid and get its mode
     struct stat f_stat;
-    if (stat(path, &f_stat) != 0)
+    if (stat(actual_path, &f_stat) != 0)
     {
-        error(0, errno, "cannot access '%s'", path);
+        error(0, errno, "cannot access '%s'", actual_path);
         return 0;
     }
     mode_t i_mode = f_stat.st_mode;
     mode_t f_mode = get_mode(i_mode);
 
     //Change the FILE/DIR mode
-    chmod(path, f_mode); //TODO: Check for errors?
+    chmod(actual_path, f_mode); //TODO: Check for errors?
 
     //Confirm the new FILE/DIR mode
-    if (stat(path, &f_stat) != 0)
+    if (stat(actual_path, &f_stat) != 0)
     {
-        error(0, errno, "cannot access '%s'", path);
+        error(0, errno, "cannot access '%s'", actual_path);
         return 0;
     }
 
@@ -255,7 +268,7 @@ mode_t change_mode()
     if (log)
     {
         char *log_message;
-        asprintf(&log_message, "%s : %o : %o", realpath(path, NULL), i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
+        asprintf(&log_message, "%s : %o : %o", realpath(actual_path, NULL), i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
         write_log("FILE_MODF", log_message);
         free(log_message);
     }
@@ -270,7 +283,7 @@ mode_t change_mode()
             {
                 exit(1);
             }
-            printf("mode of '%s' retained as %o (%s)\n", path, i_mode & MODE_MASK, mode_str);
+            printf("mode of '%s' retained as %o (%s)\n", actual_path, i_mode & MODE_MASK, mode_str);
             free(mode_str);
         }
     }
@@ -286,59 +299,19 @@ mode_t change_mode()
         {
             exit(1);
         }
-        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
+        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", actual_path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
         free(i_mode_str);
         free(f_mode_str);
     }
     return f_stat.st_mode;
 }
 
-void change_mode_handler()
-{
-    mode_t mode = change_mode(NULL);
-
-    if (recursive && S_ISDIR(mode))
-    {
-        DIR *dir;
-        struct dirent *dir_entry;
-        if ((dir = opendir(path)) == NULL)
-        {
-            error(0, errno, "cannot read directory %s", path);
-            return;
-        }
-        chdir(path);
-        pid_t child_pid;
-        while ((dir_entry = readdir(dir)) != NULL)
-        {
-            path = dir_entry->d_name;
-            stat(dir_entry->d_name, &f_stat); //TODO: Check for errors as already done above
-            if (S_ISREG(f_stat.st_mode) && !S_ISLNK(f_stat.st_mode))
-            {
-                change_mode(dir_entry->d_name);
-                //TODO: Log FILE_MODF
-            }
-            if (S_ISDIR(f_stat.st_mode) && strcmp(dir_entry->d_name, "..") && strcmp(dir_entry->d_name, "."))
-            {
-                child_pid = fork(); //TODO: Log PROC_CREAT
-
-                if (child_pid == 0)
-                {
-                    change_mode_handler();
-                    break;
-                }
-            }
-        }
-        if (child_pid != 0)
-        {
-            int wstatus;
-            while (wait(&wstatus) > 0)
-                ;
-        }
-    }
-}
-
 int main(int argc, char *argv[], char *envp[])
 {
+    /*char * test = NULL;
+    size_t n = 0;
+    getline(&test, &n, stdin);*/
+
     //time_t start = time(0);
     start = clock();
 
@@ -349,7 +322,7 @@ int main(int argc, char *argv[], char *envp[])
         print_usage();
     }
 
-    double time_spent = 0.0;
+    //double time_spent = 0.0;
     unsigned arg;
     char *log_filename;
 
@@ -358,7 +331,8 @@ int main(int argc, char *argv[], char *envp[])
     {
         if (argv[arg][1] == '\0' || argv[arg][2] != '\0')
         {
-            print_error(EINVAL);
+            error(0, EINVAL,"unable to read options");
+            log_exit(EINVAL);
         }
 
         switch (argv[arg][1])
@@ -376,7 +350,8 @@ int main(int argc, char *argv[], char *envp[])
             break;
 
         default:
-            print_error(EINVAL);
+            error(0, EINVAL,"unable to read options");
+            log_exit(EINVAL);
             break;
         }
     }
@@ -405,9 +380,10 @@ int main(int argc, char *argv[], char *envp[])
         printf("Non-recursive mode\n");
     } */
 
-    if (arg == argc || arg == argc - 1)
+    if (arg != argc - 2)
     {
-        print_error(EINVAL);
+        error(0, EINVAL, "incorrect number of arguments");
+        log_exit(EINVAL);
     }
 
     //Validate expected mode input (either <u|g|o|a><-|+|=><rwx> or 0<0-7><0-7><0-7>)
@@ -428,7 +404,8 @@ int main(int argc, char *argv[], char *envp[])
             (e_mode[3] != '\0' && e_mode[4] != '\0' && ((e_mode[4] != 'r' && e_mode[4] != 'w' && e_mode[4] != 'x') || e_mode[4] == e_mode[2] || e_mode[4] == e_mode[3])) ||
             (e_mode[3] != '\0' && e_mode[4] != '\0' && e_mode[5] != '\0'))
         {
-            print_error(EINVAL);
+            error(0, EINVAL,"unable to read mode");
+            log_exit(EINVAL);
         }
         break;
 
@@ -438,12 +415,14 @@ int main(int argc, char *argv[], char *envp[])
         if (e_mode[1] == '\0' || e_mode[2] == '\0' || e_mode[3] == '\0' || e_mode[4] != '\0' ||
             e_mode[1] < '0' || e_mode[1] > '7' || e_mode[2] < '0' || e_mode[2] > '7' || e_mode[3] < '0' || e_mode[3] > '7')
         {
-            print_error(EINVAL);
+            error(0, EINVAL,"unable to read mode");
+            log_exit(EINVAL);
         }
         break;
 
     default:
-        print_error(EINVAL);
+        error(0, EINVAL,"unable to read mode");
+        log_exit(EINVAL);
         break;
     }
 
@@ -457,17 +436,120 @@ int main(int argc, char *argv[], char *envp[])
     }
     else
     {
-        log_file = open(log_filename, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-        log = true;
+        int flags = O_WRONLY | O_CREAT | O_APPEND;
+        printf("pid: %d, gid: %d\n", getpid(), getegid());
+        if (getpid() == getgid())
+        {
+            flags |= O_TRUNC;
+        }
+        log_file = open(log_filename, flags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        if (log_file == -1)
+        {
+            error(0, errno, "unable to open log file '%s'", log_filename);
+        }
+        else
+        {
+            log = true;
+        }
     }
 
-    change_mode_handler();
+    mode_t mode = change_mode(path);
+
+    if (recursive && S_ISDIR(mode))
+    {
+        DIR *dir;
+        struct dirent *dir_entry;
+        if ((dir = opendir(path)) == NULL)
+        {
+            error(0, errno, "cannot open directory %s", path);
+        }
+        else
+        {
+            pid_t child_pid = 0;
+            while ((dir_entry = readdir(dir)) != NULL)
+            {
+                char *actual_path;
+                if (path[strlen(path) - 1] == '/')
+                {
+                    asprintf(&actual_path, "%s%s", path, dir_entry->d_name);
+                }
+                else
+                {
+                    asprintf(&actual_path, "%s/%s", path, dir_entry->d_name);
+                }
+                if (stat(actual_path, &f_stat) != 0)
+                {
+                    error(0, errno, "cannot access '%s'", path);
+                    free(actual_path);
+                    continue;
+                }
+                if (S_ISLNK(f_stat.st_mode))
+                {
+                    printf("neither symbolic link '%s' nor referent has been changed\n", actual_path);
+                }
+                else if (S_ISREG(f_stat.st_mode))
+                {
+                    change_mode(actual_path);
+                }
+                else if (S_ISDIR(f_stat.st_mode) && strcmp(dir_entry->d_name, "..") && strcmp(dir_entry->d_name, "."))
+                {
+                    child_pid = fork();
+
+                    if (child_pid == -1)
+                    {
+                        error(0, errno, "unable to create child process (aborting)");
+                        log_exit(errno);
+                    }
+                    else if (child_pid == 0)
+                    {
+                        char **arguments;
+                        arguments = malloc(sizeof(char *) * (argc + 1));
+                        memcpy(arguments, argv, (argc - 1) * sizeof(char *));
+                        arguments[argc - 1] = actual_path;
+                        arguments[argc] = NULL;
+                        execv(argv[0], arguments);
+                        free(arguments);
+                        free(actual_path);
+                        exit(0);
+                    }
+                    else if (log)
+                    {
+                        int arglen = 0;
+                        for (int i = 0; i < argc; i++)
+                        {
+                            arglen += strlen(argv[i]);
+                        }
+
+                        char *log_message = malloc((arglen + argc) * sizeof(char));
+
+                        for (int i = 0; i < argc; i++)
+                        {
+                            strcat(log_message, argv[i]);
+                            if (i != argc - 1)
+                                strcat(log_message, " ");
+                        }
+                        write_log("PROC_CREAT", log_message);
+                        free(log_message);
+                    }
+                }
+                free(actual_path);
+            }
+            if (child_pid != 0)
+            {
+                int wstatus;
+                while (wait(&wstatus) > 0)
+                    ;
+            }
+        }
+    }
 
     //Time End
     //time_t end = time(0);
-    clock_t end = clock();
+    //clock_t end = clock();
     //time_spent = difftime(end, start) * 1000;
-    time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
+    //time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
     //printf("\nEND Execution Time: %.2f ms \n", time_spent);
-    close(log_file);
+
+    if (log)
+        close(log_file);
 }
