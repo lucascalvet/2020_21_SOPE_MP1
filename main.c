@@ -31,14 +31,14 @@ enum Mode
     OCTAL_MODE
 };
 
-static char *path;
+static char *path = "";
 static enum Mode mode;
 static char *e_mode;
 static int nftot = 0;
 static int nfmod = 0;
 static int log_file = 0;
 static bool log = false;
-static clock_t start;
+//static clock_t start;
 static enum Verbosity verbosity = OFF;
 static bool recursive = false;
 static struct stat f_stat;
@@ -106,12 +106,14 @@ void write_log(char *event, char *info)
     //time_t instant = time(0);
     clock_t instant = clock();
     //unsigned log_time = difftime(instant, start) * 1000;
-    unsigned log_time = (instant - start) * 1000 / CLOCKS_PER_SEC;
+    //unsigned log_time = (instant - start) * 1000 / CLOCKS_PER_SEC;
+    //double log_time = (double)(instant) * 1000 / CLOCKS_PER_SEC;
+    unsigned log_time = (unsigned)((instant / CLOCKS_PER_SEC) * 1000);
     pid_t pid = getpid();
-    char *log;
-    asprintf(&log, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
-    write(log_file, log, 100);
-    free(log);
+    char *log_message;
+    asprintf(&log_message, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
+    write(log_file, log_message, strlen(log_message));
+    free(log_message);
 }
 
 void log_exit(int exit_n)
@@ -119,7 +121,7 @@ void log_exit(int exit_n)
     if (log)
     {
         char *log_message;
-        asprintf(&log_message, "Exit Code: %d", exit_n);
+        asprintf(&log_message, "%d", exit_n);
         write_log("PROC_EXIT", log_message);
         free(log_message);
     }
@@ -131,10 +133,9 @@ void sig_handler(int signal)
 {
     if (signal == SIGINT)
     {
-        pid_t pid = getpid();
-        printf("\n%d ; %s ; %d ; %d", pid, path, nftot, nfmod);
+        killpg(getpgrp(), SIGUSR1);
 
-        write_log("SIGNAL_RECV", "SIGINT");
+        if (log) write_log("SIGNAL_RECV", "SIGINT");
 
         char *buffer = NULL;
         bool answer = false;
@@ -162,8 +163,19 @@ void sig_handler(int signal)
 
         if (answer)
         {
-            exit(0);
+            killpg(getpgrp(), SIGUSR2); // Kill all children
         }
+    }
+    else if (signal == SIGUSR1)
+    {
+        pid_t pid = getpid();
+        char *real_path = realpath(path, NULL);
+        printf("%d ; %s ; %d ; %d\n", pid, real_path, nftot, nfmod);
+        free(real_path);
+    }
+    else if (signal == SIGUSR2)
+    {
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -268,8 +280,10 @@ mode_t change_mode(char *actual_path)
     if (log)
     {
         char *log_message;
-        asprintf(&log_message, "%s : %o : %o", realpath(actual_path, NULL), i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
+        char *real_path = realpath(actual_path, NULL);
+        asprintf(&log_message, "%s : %o : %o", real_path, i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
         write_log("FILE_MODF", log_message);
+        free(real_path);
         free(log_message);
     }
 
@@ -313,19 +327,63 @@ int main(int argc, char *argv[], char *envp[])
     getline(&test, &n, stdin);*/
 
     //time_t start = time(0);
-    start = clock();
+    //start = clock();
 
     signal(SIGINT, sig_handler);
+    signal(SIGUSR1, sig_handler);
+    signal(SIGUSR2, sig_handler);
+
+    char *log_filename;
+
+    //Check for a logging file. If there is one, open it.
+    log_filename = getenv("LOG_FILENAME");
+    if (log_filename == NULL)
+    {
+        log = false;
+    }
+    else
+    {
+        int flags = O_WRONLY | O_CREAT | O_APPEND;
+        if (getpid() == getpgrp())
+        {
+            flags |= O_TRUNC;
+        }
+        log_file = open(log_filename, flags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+        if (log_file == -1)
+        {
+            error(0, errno, "unable to open log file '%s'", log_filename);
+        }
+        else
+        {
+            log = true;
+        }
+    }
+    if (log)
+    {
+        int arglen = 0;
+        for (int i = 0; i < argc; i++)
+        {
+            arglen += strlen(argv[i]);
+        }
+
+        char *log_message = malloc((arglen + argc) * sizeof(char));
+
+        for (int i = 0; i < argc; i++)
+        {
+            strcat(log_message, argv[i]);
+            if (i != argc - 1)
+                strcat(log_message, " ");
+        }
+        write_log("PROC_CREAT", log_message);
+        free(log_message);
+    }
 
     if (argc <= 1)
     {
         print_usage();
     }
-
-    //double time_spent = 0.0;
+    
     unsigned arg;
-    char *log_filename;
-
     //Parse command line options ('-v', '-c' or '-R')
     for (arg = 1; arg < argc && argv[arg][0] == '-'; arg++)
     {
@@ -427,32 +485,7 @@ int main(int argc, char *argv[], char *envp[])
     }
 
     path = argv[arg + 1]; //Set inputted path
-
-    //Check for a logging file. If there is one, open it.
-    log_filename = getenv("LOG_FILENAME");
-    if (log_filename == NULL)
-    {
-        log = false;
-    }
-    else
-    {
-        int flags = O_WRONLY | O_CREAT | O_APPEND;
-        printf("pid: %d, gid: %d\n", getpid(), getegid());
-        if (getpid() == getgid())
-        {
-            flags |= O_TRUNC;
-        }
-        log_file = open(log_filename, flags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-        if (log_file == -1)
-        {
-            error(0, errno, "unable to open log file '%s'", log_filename);
-        }
-        else
-        {
-            log = true;
-        }
-    }
-
+    nftot++;
     mode_t mode = change_mode(path);
 
     if (recursive && S_ISDIR(mode))
@@ -489,6 +522,7 @@ int main(int argc, char *argv[], char *envp[])
                 }
                 else if (S_ISREG(f_stat.st_mode))
                 {
+                    nftot++;
                     change_mode(actual_path);
                 }
                 else if (S_ISDIR(f_stat.st_mode) && strcmp(dir_entry->d_name, "..") && strcmp(dir_entry->d_name, "."))
@@ -512,28 +546,11 @@ int main(int argc, char *argv[], char *envp[])
                         free(actual_path);
                         exit(0);
                     }
-                    else if (log)
-                    {
-                        int arglen = 0;
-                        for (int i = 0; i < argc; i++)
-                        {
-                            arglen += strlen(argv[i]);
-                        }
-
-                        char *log_message = malloc((arglen + argc) * sizeof(char));
-
-                        for (int i = 0; i < argc; i++)
-                        {
-                            strcat(log_message, argv[i]);
-                            if (i != argc - 1)
-                                strcat(log_message, " ");
-                        }
-                        write_log("PROC_CREAT", log_message);
-                        free(log_message);
-                    }
                 }
                 free(actual_path);
             }
+            if (getpid() == getpgrp())
+                //raise(SIGINT);
             if (child_pid != 0)
             {
                 int wstatus;
@@ -545,11 +562,15 @@ int main(int argc, char *argv[], char *envp[])
 
     //Time End
     //time_t end = time(0);
-    //clock_t end = clock();
+    clock_t end = clock();
     //time_spent = difftime(end, start) * 1000;
     //time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
-    //printf("\nEND Execution Time: %.2f ms \n", time_spent);
+    double time_spent = ((double)(end) / CLOCKS_PER_SEC) * 1000;
+    //printf("\n Process Execution Time: %.2f ms \n", time_spent);
 
     if (log)
+    {
+        log_exit(0);
         close(log_file);
+    }
 }
