@@ -38,7 +38,6 @@ static int nftot = 0;
 static int nfmod = 0;
 static int log_file = 0;
 static bool log = false;
-//static clock_t start;
 static clock_t base_time = 0;
 static enum Verbosity verbosity = OFF;
 static bool recursive = false;
@@ -272,12 +271,6 @@ mode_t change_mode(char *actual_path)
         return 0;
     }
 
-    /** //FOR TESTING TIME LOGGING
-    char * test = NULL;
-    size_t n = 0;
-    getline(&test, &n, stdin);
-    */
-
     //Log FILE_MODF
     if (log)
     {
@@ -331,13 +324,6 @@ mode_t change_mode(char *actual_path)
 
 int main(int argc, char *argv[], char *envp[])
 {
-    /*char * test = NULL;
-    size_t n = 0;
-    getline(&test, &n, stdin);*/
-
-    //time_t start = time(0);
-    //start = clock();
-
     if (getpid() == getpgrp())
         signal(SIGINT, sig_handler);
     signal(SIGUSR1, sig_handler);
@@ -445,30 +431,6 @@ int main(int argc, char *argv[], char *envp[])
             break;
         }
     }
-
-    /* TODO: Delete
-    switch (verbosity)
-    {
-    case OFF:
-        printf("No verbosity\n");
-        break;
-
-    case CHANGES:
-        printf("Show changes only\n");
-        break;
-
-    case ALL:
-        printf("Full verbosity!!!\n");
-    }
-
-    if (recursive)
-    {
-        printf("Recursive mode chosen\n");
-    }
-    else
-    {
-        printf("Non-recursive mode\n");
-    } */
 
     if (arg != argc - 2)
     {
@@ -602,7 +564,6 @@ int main(int argc, char *argv[], char *envp[])
                             envs[1] = env_log_filename;
                         }
 
-                        //execv(argv[0], arguments);
                         execvpe(argv[0], arguments, envs);
                         free(arguments);
                         free(base_time_str);
@@ -621,14 +582,6 @@ int main(int argc, char *argv[], char *envp[])
             }
         }
     }
-
-    //Time End
-    //time_t end = time(0);
-    //clock_t end = clock();
-    //time_spent = difftime(end, start) * 1000;
-    //time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
-    //double time_spent = ((double)(end) / CLOCKS_PER_SEC) * 1000;
-    //printf("\n Process Execution Time: %.2f ms \n", time_spent);
 
     if (log)
     {
