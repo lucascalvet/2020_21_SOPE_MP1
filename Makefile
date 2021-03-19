@@ -3,7 +3,7 @@ CFLAGS=-g -Wall -D_GNU_SOURCE
 
 RM=rm -f
 
-SRCS=$(wildcard *.c)
+SRCS=xmod.c
 
 all: xmod
 
