@@ -109,10 +109,10 @@ void sig_handler(int r_signal)
         char *buffer = NULL;
         bool answer = false;
         size_t n = 0;
-
+        usleep(100000);
         do
         {
-            printf("\nAre you sure you want to terminate the program? (Y/N)\n");
+            printf("Are you sure you want to terminate the program? (Y/N)\n");
 
             getline(&buffer, &n, stdin);
             if (strcasecmp(buffer, "Y\n") == 0)
@@ -323,7 +323,7 @@ int main(int argc, char *argv[], char *envp[])
     //time_t start = time(0);
     //start = clock();
 
-    signal(SIGINT, sig_handler);
+    if (getpid() == getpgrp()) signal(SIGINT, sig_handler);
     signal(SIGUSR1, sig_handler);
     signal(SIGUSR2, sig_handler);
 
@@ -577,8 +577,6 @@ int main(int argc, char *argv[], char *envp[])
                 }
                 free(actual_path);
             }
-            if (getpid() == getpgrp())
-                raise(SIGINT);
             if (child_pid != 0)
             {
                 int wstatus;
