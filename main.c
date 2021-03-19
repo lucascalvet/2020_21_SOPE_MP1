@@ -39,6 +39,7 @@ static int nfmod = 0;
 static int log_file = 0;
 static bool log = false;
 //static clock_t start;
+static clock_t base_time = 0;
 static enum Verbosity verbosity = OFF;
 static bool recursive = false;
 static struct stat f_stat;
@@ -46,41 +47,28 @@ static struct stat f_stat;
 typedef void sigfunc(int);
 sigfunc *signal(int signo, sigfunc *func);
 
-void print_error(int error)
+void write_log(char *event, char *info)
 {
-    char *st_error = NULL;
-    switch (error)
+    clock_t instant = clock() + base_time;
+    unsigned log_time = (unsigned)((instant * 1000 / CLOCKS_PER_SEC));
+    pid_t pid = getpid();
+    char *log_message;
+    asprintf(&log_message, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
+    write(log_file, log_message, strlen(log_message));
+    free(log_message);
+}
+
+void log_exit(int exit_n)
+{
+    if (log)
     {
-    case EPERM:
-        st_error = "Error Number 1  -> EPERM    -> Operation not permitted";
-        break;
-    case ENOENT:
-        st_error = "Error Number 2  -> ENOENT   -> No such file or directory";
-        break;
-    case ESRCH:
-        st_error = "Error Number 3  -> ESRCH    -> No such process";
-        break;
-    case EINTR:
-        st_error = "Error Number 4  -> EINTR    -> Interrupted system call";
-        break;
-    case EIO:
-        st_error = "Error Number 5  -> EIO      -> I/O error";
-        break;
-    case E2BIG:
-        st_error = "Error Number 7  -> E2BIG    -> Argument list too long";
-        break;
-    case EINVAL:
-        st_error = "Error Number 22 -> EINVAL   -> Invalid argument";
-        break;
-
-    default:
-        st_error = "Unspecified Error";
-        break;
+        char *log_message;
+        asprintf(&log_message, "%d", exit_n);
+        write_log("PROC_EXIT", log_message);
+        free(log_message);
+        close(log_file);
     }
-
-    printf("\n%s\n", st_error);
-
-    exit(error); //TODO: Log program exits
+    exit(exit_n);
 }
 
 void print_usage()
@@ -98,44 +86,25 @@ void print_usage()
            "\n"
            "OCTAL-MODE: 0<0-7><0-7><0-7>\n");
 
-    exit(0);
+    log_exit(EXIT_SUCCESS);
 }
 
-void write_log(char *event, char *info)
+void sig_handler(int r_signal)
 {
-    //time_t instant = time(0);
-    clock_t instant = clock();
-    //unsigned log_time = difftime(instant, start) * 1000;
-    //unsigned log_time = (instant - start) * 1000 / CLOCKS_PER_SEC;
-    //double log_time = (double)(instant) * 1000 / CLOCKS_PER_SEC;
-    unsigned log_time = (unsigned)((instant / CLOCKS_PER_SEC) * 1000);
-    pid_t pid = getpid();
-    char *log_message;
-    asprintf(&log_message, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
-    write(log_file, log_message, strlen(log_message));
-    free(log_message);
-}
-
-void log_exit(int exit_n)
-{
-    if (log)
+    if (r_signal == SIGINT)
     {
-        char *log_message;
-        asprintf(&log_message, "%d", exit_n);
-        write_log("PROC_EXIT", log_message);
-        free(log_message);
-    }
+        if (log)
+            write_log("SIGNAL_RECV", "SIGINT");
 
-    exit(exit_n);
-}
-
-void sig_handler(int signal)
-{
-    if (signal == SIGINT)
-    {
         killpg(getpgrp(), SIGUSR1);
 
-        if (log) write_log("SIGNAL_RECV", "SIGINT");
+        if (log)
+        {
+            char *sigusr1_msg;
+            asprintf(&sigusr1_msg, "SIGUSR1 : %d", getpgrp());
+            write_log("SIGNAL_SENT", sigusr1_msg);
+            free(sigusr1_msg);
+        }
 
         char *buffer = NULL;
         bool answer = false;
@@ -156,26 +125,42 @@ void sig_handler(int signal)
                 answer = false;
                 break;
             }
-
         } while (true);
 
         free(buffer);
 
         if (answer)
         {
-            killpg(getpgrp(), SIGUSR2); // Kill all children
+            killpg(getpgrp(), SIGUSR2); // Kill parent and all children
+            if (log)
+            {
+                char *sigusr2_msg;
+                asprintf(&sigusr2_msg, "SIGUSR2 : %d", getpgrp());
+                write_log("SIGNAL_SENT", sigusr2_msg);
+                free(sigusr2_msg);
+            }
+        }
+        else
+        {
+            killpg(getpgrp(), SIGCONT);
         }
     }
-    else if (signal == SIGUSR1)
+    else if (r_signal == SIGUSR1)
     {
+        if (log)
+            write_log("SIGNAL_RECV", "SIGUSR1");
         pid_t pid = getpid();
         char *real_path = realpath(path, NULL);
         printf("%d ; %s ; %d ; %d\n", pid, real_path, nftot, nfmod);
         free(real_path);
+        if (getpid() != getpgrp())
+            raise(SIGTSTP);
     }
-    else if (signal == SIGUSR2)
+    else if (r_signal == SIGUSR2)
     {
-        exit(EXIT_FAILURE);
+        if (log)
+            write_log("SIGNAL_RECV", "SIGUSR2");
+        log_exit(EXIT_FAILURE);
     }
 }
 
@@ -185,7 +170,7 @@ int get_mode_string(mode_t mode, char **result)
     if (*result == NULL)
         return -1;
     mode = mode & MODE_MASK;
-    strcpy(*result, "rwxrwxrwx");
+    snprintf(*result, 10 * sizeof(char), "rwxrwxrwx");
     for (int i = 0; i < 9; i++)
     {
         if (!(mode & BIT(8 - i)))
@@ -197,7 +182,7 @@ int get_mode_string(mode_t mode, char **result)
 
 mode_t get_mode(mode_t i_mode)
 {
-    mode_t f_mode;
+    mode_t f_mode = 0;
     if (mode == ALPHA_MODE)
     {
         mode_t perms = 0;
@@ -250,9 +235,10 @@ mode_t get_mode(mode_t i_mode)
 
 mode_t change_mode(char *actual_path)
 {
-    //Check if the path is valid and get its mode
+    nftot++;
+    //Check if FILE/DIR is valid and get its mode
     struct stat f_stat;
-    if (stat(actual_path, &f_stat) != 0)
+    if (stat(actual_path, &f_stat) != OK)
     {
         error(0, errno, "cannot access '%s'", actual_path);
         return 0;
@@ -261,10 +247,14 @@ mode_t change_mode(char *actual_path)
     mode_t f_mode = get_mode(i_mode);
 
     //Change the FILE/DIR mode
-    chmod(actual_path, f_mode); //TODO: Check for errors?
+    if (chmod(actual_path, f_mode) != OK)
+    {
+        error(0, errno, "cannot access '%s'", actual_path);
+        return 0;
+    }
 
     //Confirm the new FILE/DIR mode
-    if (stat(actual_path, &f_stat) != 0)
+    if (stat(actual_path, &f_stat) != OK)
     {
         error(0, errno, "cannot access '%s'", actual_path);
         return 0;
@@ -295,27 +285,31 @@ mode_t change_mode(char *actual_path)
             char *mode_str = NULL;
             if (get_mode_string(i_mode, &mode_str) != OK)
             {
-                exit(1);
+                log_exit(EXIT_FAILURE);
             }
             printf("mode of '%s' retained as %o (%s)\n", actual_path, i_mode & MODE_MASK, mode_str);
             free(mode_str);
         }
     }
-    else if (verbosity != OFF)
+    else
     {
-        char *i_mode_str;
-        char *f_mode_str;
-        if (get_mode_string(i_mode, &i_mode_str) != OK)
+        nfmod++;
+        if (verbosity != OFF)
         {
-            exit(1);
+            char *i_mode_str;
+            char *f_mode_str;
+            if (get_mode_string(i_mode, &i_mode_str) != OK)
+            {
+                log_exit(EXIT_FAILURE);
+            }
+            if (get_mode_string(f_stat.st_mode, &f_mode_str) != OK)
+            {
+                log_exit(EXIT_FAILURE);
+            }
+            printf("mode of '%s' changed from %o (%s) to %o (%s)\n", actual_path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
+            free(i_mode_str);
+            free(f_mode_str);
         }
-        if (get_mode_string(f_stat.st_mode, &f_mode_str) != OK)
-        {
-            exit(1);
-        }
-        printf("mode of '%s' changed from %o (%s) to %o (%s)\n", actual_path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
-        free(i_mode_str);
-        free(f_mode_str);
     }
     return f_stat.st_mode;
 }
@@ -334,8 +328,19 @@ int main(int argc, char *argv[], char *envp[])
     signal(SIGUSR2, sig_handler);
 
     char *log_filename;
+    char *base_time_text;
 
     //Check for a logging file. If there is one, open it.
+    base_time_text = getenv("BASE_TIME");
+    if (base_time_text == NULL)
+    {
+        base_time = 0;
+    }
+    else
+    {
+        sscanf(base_time_text, "%ld", &base_time);
+    }
+
     log_filename = getenv("LOG_FILENAME");
     if (log_filename == NULL)
     {
@@ -367,30 +372,37 @@ int main(int argc, char *argv[], char *envp[])
         }
 
         char *log_message = malloc((arglen + argc) * sizeof(char));
+        char *build_message = malloc((arglen + argc) * sizeof(char));
+        log_message[0] = '\0';
 
         for (int i = 0; i < argc; i++)
         {
-            strcat(log_message, argv[i]);
+            snprintf(build_message, arglen + argc, "%s", log_message);
+            snprintf(log_message, arglen + argc, "%s%s", build_message, argv[i]);
             if (i != argc - 1)
-                strcat(log_message, " ");
+            {
+                snprintf(build_message, arglen + argc, "%s", log_message);
+                snprintf(log_message, arglen + argc, "%s ", build_message);
+            }
         }
         write_log("PROC_CREAT", log_message);
         free(log_message);
+        free(build_message);
     }
 
     if (argc <= 1)
     {
         print_usage();
     }
-    
+
     unsigned arg;
     //Parse command line options ('-v', '-c' or '-R')
     for (arg = 1; arg < argc && argv[arg][0] == '-'; arg++)
     {
         if (argv[arg][1] == '\0' || argv[arg][2] != '\0')
         {
-            error(0, EINVAL,"unable to read options");
-            log_exit(EINVAL);
+            error(0, EINVAL, "unable to read options");
+            log_exit(EXIT_FAILURE);
         }
 
         switch (argv[arg][1])
@@ -408,8 +420,8 @@ int main(int argc, char *argv[], char *envp[])
             break;
 
         default:
-            error(0, EINVAL,"unable to read options");
-            log_exit(EINVAL);
+            error(0, EINVAL, "unable to read options");
+            log_exit(EXIT_FAILURE);
             break;
         }
     }
@@ -441,7 +453,7 @@ int main(int argc, char *argv[], char *envp[])
     if (arg != argc - 2)
     {
         error(0, EINVAL, "incorrect number of arguments");
-        log_exit(EINVAL);
+        log_exit(EXIT_FAILURE);
     }
 
     //Validate expected mode input (either <u|g|o|a><-|+|=><rwx> or 0<0-7><0-7><0-7>)
@@ -462,8 +474,8 @@ int main(int argc, char *argv[], char *envp[])
             (e_mode[3] != '\0' && e_mode[4] != '\0' && ((e_mode[4] != 'r' && e_mode[4] != 'w' && e_mode[4] != 'x') || e_mode[4] == e_mode[2] || e_mode[4] == e_mode[3])) ||
             (e_mode[3] != '\0' && e_mode[4] != '\0' && e_mode[5] != '\0'))
         {
-            error(0, EINVAL,"unable to read mode");
-            log_exit(EINVAL);
+            error(0, EINVAL, "unable to read mode");
+            log_exit(EXIT_FAILURE);
         }
         break;
 
@@ -473,19 +485,18 @@ int main(int argc, char *argv[], char *envp[])
         if (e_mode[1] == '\0' || e_mode[2] == '\0' || e_mode[3] == '\0' || e_mode[4] != '\0' ||
             e_mode[1] < '0' || e_mode[1] > '7' || e_mode[2] < '0' || e_mode[2] > '7' || e_mode[3] < '0' || e_mode[3] > '7')
         {
-            error(0, EINVAL,"unable to read mode");
-            log_exit(EINVAL);
+            error(0, EINVAL, "unable to read mode");
+            log_exit(EXIT_FAILURE);
         }
         break;
 
     default:
-        error(0, EINVAL,"unable to read mode");
-        log_exit(EINVAL);
+        error(0, EINVAL, "unable to read mode");
+        log_exit(EXIT_FAILURE);
         break;
     }
 
     path = argv[arg + 1]; //Set inputted path
-    nftot++;
     mode_t mode = change_mode(path);
 
     if (recursive && S_ISDIR(mode))
@@ -522,17 +533,17 @@ int main(int argc, char *argv[], char *envp[])
                 }
                 else if (S_ISREG(f_stat.st_mode))
                 {
-                    nftot++;
                     change_mode(actual_path);
                 }
                 else if (S_ISDIR(f_stat.st_mode) && strcmp(dir_entry->d_name, "..") && strcmp(dir_entry->d_name, "."))
                 {
+                    clock_t total_time = base_time + clock();
                     child_pid = fork();
 
                     if (child_pid == -1)
                     {
                         error(0, errno, "unable to create child process (aborting)");
-                        log_exit(errno);
+                        log_exit(EXIT_FAILURE);
                     }
                     else if (child_pid == 0)
                     {
@@ -541,16 +552,33 @@ int main(int argc, char *argv[], char *envp[])
                         memcpy(arguments, argv, (argc - 1) * sizeof(char *));
                         arguments[argc - 1] = actual_path;
                         arguments[argc] = NULL;
-                        execv(argv[0], arguments);
+                        char *envs[3];
+                        char *base_time_str;
+                        char *env_log_filename;
+                        total_time = total_time + clock();
+                        asprintf(&base_time_str, "BASE_TIME=%ld", total_time);
+                        envs[0] = base_time_str;
+                        envs[1] = NULL;
+                        envs[2] = NULL;
+                        if (log)
+                        {
+                            asprintf(&env_log_filename, "LOG_FILENAME=%s", log_filename);
+                            envs[1] = env_log_filename;
+                        }
+
+                        //execv(argv[0], arguments);
+                        execvpe(argv[0], arguments, envs);
                         free(arguments);
+                        free(base_time_str);
+                        free(env_log_filename);
                         free(actual_path);
-                        exit(0);
+                        log_exit(EXIT_SUCCESS);
                     }
                 }
                 free(actual_path);
             }
             if (getpid() == getpgrp())
-                //raise(SIGINT);
+                raise(SIGINT);
             if (child_pid != 0)
             {
                 int wstatus;
@@ -562,15 +590,14 @@ int main(int argc, char *argv[], char *envp[])
 
     //Time End
     //time_t end = time(0);
-    clock_t end = clock();
+    //clock_t end = clock();
     //time_spent = difftime(end, start) * 1000;
     //time_spent = ((double)(end - start) / CLOCKS_PER_SEC) * 1000;
-    double time_spent = ((double)(end) / CLOCKS_PER_SEC) * 1000;
+    //double time_spent = ((double)(end) / CLOCKS_PER_SEC) * 1000;
     //printf("\n Process Execution Time: %.2f ms \n", time_spent);
 
     if (log)
     {
-        log_exit(0);
-        close(log_file);
+        log_exit(EXIT_SUCCESS);
     }
 }
