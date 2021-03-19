@@ -6,11 +6,6 @@
 
 ## Run
 
-       ./xmod [OPTIONS] MODE FILE/DIR
-       ./xmod [OPTIONS] OCTAL-MODE FILE/DIR
-
-## How to use
-
        Usage: xmod [OPTIONS] MODE FILE/DIR
               xmod [OPTIONS] OCTAL-MODE FILE/DIR
 
@@ -52,8 +47,19 @@ For example 0755, only the owner of the file has writing permission, all others 
 
 ## Notes
 
-- If compiling without the Makefile, make sure to add `-D_GNU_SOURCE` (needed for the use of _`asprintf`_ and _`execvpe`_ functions)
+- If compiling without the Makefile, make sure to add `-D_GNU_SOURCE` (needed for the use of _`asprintf`_ and _`execvpe`_ functions).
 
 - Files or directories containing spaces must be enclosed in quotes or escaped with a backslash for each blank space.
 
 - For error handling, we use the _`error()`_ function to print to stderr a description of the error.
+
+- For testing with the shell script, run `./testMP1.sh ./xmod dummy_dir teste.txt` .
+
+
+## Authorship / Participation
+
+| Name                     | Email                      | Participation  |
+|:-------------------------|:---------------------------|:--------------:|
+| José Frederico Rodrigues | <up201807626@edu.fe.up.pt> | 33%            |
+| José Pedro Ferreira      | <up201904515@fe.up.pt>     | 33%            |
+| Lucas Calvet Santos      | <up201904517@fe.up.pt>     | 34%            |
