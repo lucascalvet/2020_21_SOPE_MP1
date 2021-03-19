@@ -261,7 +261,7 @@ mode_t change_mode(char *actual_path)
     //Change the FILE/DIR mode
     if (chmod(actual_path, f_mode) != OK)
     {
-        error(0, errno, "cannot access '%s'", actual_path);
+        error(0, errno, "changing permissions of '%s'", actual_path);
         return 0;
     }
 
@@ -302,7 +302,7 @@ mode_t change_mode(char *actual_path)
             {
                 log_exit(EXIT_FAILURE);
             }
-            printf("mode of '%s' retained as %o (%s)\n", actual_path, i_mode & MODE_MASK, mode_str);
+            printf("mode of '%s' retained as %04o (%s)\n", actual_path, i_mode & MODE_MASK, mode_str);
             free(mode_str);
         }
     }
@@ -321,7 +321,7 @@ mode_t change_mode(char *actual_path)
             {
                 log_exit(EXIT_FAILURE);
             }
-            printf("mode of '%s' changed from %o (%s) to %o (%s)\n", actual_path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
+            printf("mode of '%s' changed from %04o (%s) to %04o (%s)\n", actual_path, i_mode & MODE_MASK, i_mode_str, f_stat.st_mode & MODE_MASK, f_mode_str);
             free(i_mode_str);
             free(f_mode_str);
         }
