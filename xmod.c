@@ -53,7 +53,10 @@ void write_log(char *event, char *info)
     unsigned log_time = (unsigned)((instant * 1000 / CLOCKS_PER_SEC));
     pid_t pid = getpid();
     char *log_message;
-    asprintf(&log_message, "%u ; %d ; %s ; %s\n", log_time, pid, event, info);
+    if (asprintf(&log_message, "%u ; %d ; %s ; %s\n", log_time, pid, event, info) == -1)
+    {
+        exit(EXIT_FAILURE);
+    }
     write(log_file, log_message, strlen(log_message));
     free(log_message);
 }
@@ -63,7 +66,10 @@ void log_exit(int exit_n)
     if (log)
     {
         char *log_message;
-        asprintf(&log_message, "%d", exit_n);
+        if (asprintf(&log_message, "%d", exit_n) == -1)
+        {
+            exit(EXIT_FAILURE);
+        }
         write_log("PROC_EXIT", log_message);
         free(log_message);
         close(log_file);
@@ -101,7 +107,10 @@ void sig_handler(int r_signal)
         if (log)
         {
             char *sigusr1_msg;
-            asprintf(&sigusr1_msg, "SIGUSR1 : %d", getpgrp());
+            if (asprintf(&sigusr1_msg, "SIGUSR1 : %d", getpgrp()) == -1)
+            {
+                exit(EXIT_FAILURE);
+            }
             write_log("SIGNAL_SENT", sigusr1_msg);
             free(sigusr1_msg);
         }
@@ -135,7 +144,10 @@ void sig_handler(int r_signal)
             if (log)
             {
                 char *sigusr2_msg;
-                asprintf(&sigusr2_msg, "SIGUSR2 : %d", getpgrp());
+                if (asprintf(&sigusr2_msg, "SIGUSR2 : %d", getpgrp()) == -1)
+                {
+                    exit(EXIT_SUCCESS);
+                }
                 write_log("SIGNAL_SENT", sigusr2_msg);
                 free(sigusr2_msg);
             }
@@ -160,7 +172,7 @@ void sig_handler(int r_signal)
     {
         if (log)
             write_log("SIGNAL_RECV", "SIGUSR2");
-        log_exit(EXIT_FAILURE);
+        log_exit(EXIT_SUCCESS);
     }
 }
 
@@ -271,7 +283,10 @@ mode_t change_mode(char *actual_path)
     {
         char *log_message;
         char *real_path = realpath(actual_path, NULL);
-        asprintf(&log_message, "%s : %o : %o", real_path, i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK);
+        if (asprintf(&log_message, "%s : %o : %o", real_path, i_mode & MODE_MASK, f_stat.st_mode & MODE_MASK) == -1)
+        {
+            exit(EXIT_FAILURE);
+        }
         write_log("FILE_MODF", log_message);
         free(real_path);
         free(log_message);
@@ -323,7 +338,8 @@ int main(int argc, char *argv[], char *envp[])
     //time_t start = time(0);
     //start = clock();
 
-    if (getpid() == getpgrp()) signal(SIGINT, sig_handler);
+    if (getpid() == getpgrp())
+        signal(SIGINT, sig_handler);
     signal(SIGUSR1, sig_handler);
     signal(SIGUSR2, sig_handler);
 
@@ -373,6 +389,10 @@ int main(int argc, char *argv[], char *envp[])
 
         char *log_message = malloc((arglen + argc) * sizeof(char));
         char *build_message = malloc((arglen + argc) * sizeof(char));
+        if (log_message == NULL || build_message == NULL)
+        {
+            log_exit(EXIT_FAILURE);
+        }
         log_message[0] = '\0';
 
         for (int i = 0; i < argc; i++)
@@ -515,11 +535,17 @@ int main(int argc, char *argv[], char *envp[])
                 char *actual_path;
                 if (path[strlen(path) - 1] == '/')
                 {
-                    asprintf(&actual_path, "%s%s", path, dir_entry->d_name);
+                    if (asprintf(&actual_path, "%s%s", path, dir_entry->d_name) == -1)
+                    {
+                        exit(EXIT_FAILURE);
+                    }
                 }
                 else
                 {
-                    asprintf(&actual_path, "%s/%s", path, dir_entry->d_name);
+                    if (asprintf(&actual_path, "%s/%s", path, dir_entry->d_name) == -1)
+                    {
+                        exit(EXIT_FAILURE);
+                    }
                 }
                 if (stat(actual_path, &f_stat) != 0)
                 {
@@ -549,6 +575,10 @@ int main(int argc, char *argv[], char *envp[])
                     {
                         char **arguments;
                         arguments = malloc(sizeof(char *) * (argc + 1));
+                        if (arguments == NULL)
+                        {
+                            log_exit(EXIT_FAILURE);
+                        }
                         memcpy(arguments, argv, (argc - 1) * sizeof(char *));
                         arguments[argc - 1] = actual_path;
                         arguments[argc] = NULL;
@@ -556,13 +586,19 @@ int main(int argc, char *argv[], char *envp[])
                         char *base_time_str;
                         char *env_log_filename;
                         total_time = total_time + clock();
-                        asprintf(&base_time_str, "BASE_TIME=%ld", total_time);
+                        if (asprintf(&base_time_str, "BASE_TIME=%ld", total_time) == -1)
+                        {
+                            exit(EXIT_FAILURE);
+                        }
                         envs[0] = base_time_str;
                         envs[1] = NULL;
                         envs[2] = NULL;
                         if (log)
                         {
-                            asprintf(&env_log_filename, "LOG_FILENAME=%s", log_filename);
+                            if (asprintf(&env_log_filename, "LOG_FILENAME=%s", log_filename) == -1)
+                            {
+                                exit(EXIT_FAILURE);
+                            }
                             envs[1] = env_log_filename;
                         }
 
