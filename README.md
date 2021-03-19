@@ -53,6 +53,8 @@ For example 0755, only the owner of the file has writing permission, all others 
 
 - For error handling, we use the _`error()`_ function to print to stderr a description of the error.
 
+- The signal `SIGUSR1` is used for all created processes to print their information and `SIGUSR2` is used for all child processes to terminate.
+
 - For testing with the shell script, run `./testMP1.sh ./xmod dummy_dir teste.txt` .
 
 
