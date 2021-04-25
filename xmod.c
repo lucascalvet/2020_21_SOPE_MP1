@@ -509,7 +509,7 @@ int main(int argc, char *argv[], char *envp[])
                         exit(EXIT_FAILURE);
                     }
                 }
-                if (stat(actual_path, &f_stat) != 0)
+                if (lstat(actual_path, &f_stat) != OK)
                 {
                     error(0, errno, "cannot access '%s'", path);
                     free(actual_path);
@@ -517,7 +517,7 @@ int main(int argc, char *argv[], char *envp[])
                 }
                 if (S_ISLNK(f_stat.st_mode))
                 {
-                    printf("neither symbolic link '%s' nor referent has been changed\n", actual_path);
+                    if (verbosity == ALL) printf("neither symbolic link '%s' nor referent has been changed\n", actual_path);
                 }
                 else if (S_ISREG(f_stat.st_mode))
                 {
